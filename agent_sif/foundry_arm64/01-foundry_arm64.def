@@ -1,0 +1,50 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:25.06-py3
+
+%labels
+    org.opencontainers.image.title RosettaCommons Foundry for Isambard GH200
+    org.opencontainers.image.source https://github.com/RosettaCommons/foundry
+    org.opencontainers.image.revision faf42996a3cfc5f2caa726777c5745dd74c9b040
+    org.opencontainers.image.architecture arm64
+
+%files
+    build-context/foundry /opt/foundry
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    export PIP_CONFIG_FILE=/dev/null
+    export PIP_INDEX_URL=https://pypi.org/simple
+    unset PIP_EXTRA_INDEX_URL
+
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates build-essential
+    rm -rf /var/lib/apt/lists/*
+
+    python3 -m venv --system-site-packages /opt/foundry-venv
+    /opt/foundry-venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel
+    base_torch=$(python3 -c 'import torch; print(torch.__version__.split("+")[0])')
+    printf 'torch==%s\n' "$base_torch" >/tmp/torch-constraint.txt
+    /opt/foundry-venv/bin/pip install --no-cache-dir \
+        -c /tmp/torch-constraint.txt '/opt/foundry[all]'
+
+    mkdir -p /weights /work
+    chmod -R a+rX /opt/foundry /opt/foundry-venv
+    chmod a+rwx /weights /work
+
+%environment
+    export PYTHONPATH=/opt/foundry
+    export FOUNDRY_CHECKPOINT_DIRS=/weights
+    export PYTHONUNBUFFERED=1
+    export PYTHONDONTWRITEBYTECODE=1
+    export XDG_CACHE_HOME=/tmp/.cache
+
+%runscript
+    exec "$@"
+
+%test
+    /opt/foundry-venv/bin/python -c 'import torch, atomworks, cuequivariance_torch, rfd3, rf3, mpnn; assert torch.version.cuda'
+    /opt/foundry-venv/bin/foundry --help >/dev/null
+    /opt/foundry-venv/bin/rfd3 --help >/dev/null
+    /opt/foundry-venv/bin/rf3 --help >/dev/null
+    /opt/foundry-venv/bin/mpnn --help >/dev/null

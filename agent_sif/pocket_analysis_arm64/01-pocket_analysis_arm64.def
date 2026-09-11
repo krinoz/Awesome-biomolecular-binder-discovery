@@ -1,0 +1,45 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:25.06-py3
+
+%labels
+    org.opencontainers.image.title Pocket analysis ARM64
+    org.opencontainers.image.description PeSTo i_v4_1 inference and P2Rank 2.5.1 for Isambard GH200
+    org.opencontainers.image.architecture arm64
+    org.opencontainers.image.source.pesto https://github.com/LBM-EPFL/PeSTo_Inference
+    org.opencontainers.image.source.p2rank https://github.com/rdk/p2rank
+
+%files
+    build-context/pesto-src /opt/pesto
+    build-context/p2rank /opt/p2rank
+    build-context/apply_model.py /opt/pesto/apply_model.py
+    build-context/USAGE.md /opt/pocket-analysis/README.md
+    build-context/SOURCE_PINS.txt /opt/pocket-analysis/SOURCE_PINS.txt
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends openjdk-17-jre-headless ca-certificates
+    rm -rf /var/lib/apt/lists/*
+
+    /usr/bin/python -m pip install --no-cache-dir \
+        'gemmi>=0.6.4,<0.8' \
+        'tqdm>=4.66.1,<5'
+
+    chmod 0755 /opt/p2rank/prank
+    find /opt/pesto /opt/p2rank -type d -name __pycache__ -prune -exec rm -rf {} +
+
+%environment
+    export PYTHONDONTWRITEBYTECODE=1
+    export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-arm64
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+
+%test
+    test "$(uname -m)" = aarch64
+    /usr/bin/python -c 'import torch, gemmi, numpy; print(torch.__version__, gemmi.__version__)'
+    /usr/bin/java -version
+    test -x /opt/p2rank/prank
+    test ! -f /opt/pesto/save/pesto/model_ckpt.pt
+
+%runscript
+    exec /bin/sh -c 'printf "%s\n" "Read /opt/pocket-analysis/README.md and invoke PeSTo or P2Rank by absolute path."'

@@ -1,0 +1,8 @@
+--- opt/ODesign/src/utils/openfold_local/model/primitives.py
++++ opt/ODesign/src/utils/openfold_local/model/primitives.py
+@@ -47,1 +47,4 @@
+-    from flash_attn.flash_attn_interface import flash_attn_unpadded_kvpacked_func
++    try:
++        from flash_attn.flash_attn_interface import flash_attn_unpadded_kvpacked_func
++    except ImportError:
++        from flash_attn.flash_attn_interface import flash_attn_varlen_kvpacked_func as flash_attn_unpadded_kvpacked_func

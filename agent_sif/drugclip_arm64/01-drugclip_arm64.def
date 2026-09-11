@@ -1,0 +1,45 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:25.06-py3
+
+%files
+    build-context/unicore_source.tar.gz /opt/sources/unicore_source.tar.gz
+    build-context/drugclip_source.tar.gz /opt/sources/drugclip_source.tar.gz
+    build-context/drugclip_score_all.py /opt/drugclip_tools/drugclip_score_all.py
+    build-context/make_tiny_inputs.py /opt/drugclip_tools/make_tiny_inputs.py
+    build-context/README_CONTAINER.md /opt/drugclip_tools/README.md
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends libxrender1 libxext6 libsm6
+    rm -rf /var/lib/apt/lists/*
+
+    mkdir -p /opt/sources/unicore /opt/DrugCLIP
+    tar -xzf /opt/sources/unicore_source.tar.gz -C /opt/sources/unicore --strip-components=1
+    tar -xzf /opt/sources/drugclip_source.tar.gz -C /opt/DrugCLIP --strip-components=1
+
+    /usr/bin/python -m pip install --no-cache-dir \
+        iopath lmdb ml_collections scipy tensorboardX tqdm tokenizers wandb \
+        pandas scikit-learn rdkit ipython
+    /usr/bin/python -m pip install --no-cache-dir --no-deps \
+        /opt/sources/unicore
+
+    sed -i 's/torch.ones(\[1\], device="cuda")/torch.ones([1])/g' \
+        /opt/DrugCLIP/unimol/models/drugclip.py
+    chmod 755 /opt/drugclip_tools/drugclip_score_all.py \
+        /opt/drugclip_tools/make_tiny_inputs.py
+    rm -rf /opt/sources /root/.cache
+
+%environment
+    export PYTHONPATH=/opt/DrugCLIP
+    export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
+
+%test
+    /usr/bin/python -c "import platform, torch, rdkit, lmdb, unicore; import unimol; assert platform.machine() == 'aarch64'; print(torch.__version__)"
+    /usr/bin/python /opt/drugclip_tools/drugclip_score_all.py --help >/dev/null
+
+%labels
+    org.opencontainers.image.title DrugCLIP ARM64
+    org.opencontainers.image.source https://github.com/bowen-gao/DrugCLIP
+    org.opencontainers.image.revision 7a3a3fa33673f8668c811790f2e4681c98af44ef

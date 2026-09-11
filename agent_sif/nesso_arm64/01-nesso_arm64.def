@@ -1,0 +1,63 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:25.06-py3
+
+%labels
+    org.opencontainers.image.source https://github.com/recursionpharma/nesso
+    org.opencontainers.image.revision 6c72f66720d9d3447fd73c515cda963e39128b1f
+    org.opencontainers.image.description "Nesso-1 ARM64 runtime; model, CCD, and ESM-2 weights are external"
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends git ca-certificates
+    rm -rf /var/lib/apt/lists/*
+
+    git clone https://github.com/recursionpharma/nesso.git /opt/nesso
+    git -C /opt/nesso checkout 6c72f66720d9d3447fd73c515cda963e39128b1f
+    rm -rf /opt/nesso/.git
+
+    # Keep weights external. This only makes the already-supported ESM model
+    # location configurable; it does not alter embedding generation.
+    python3 - <<'PY'
+from pathlib import Path
+p = Path('/opt/nesso/nesso/data/esm.py')
+s = p.read_text()
+s = s.replace('from pathlib import Path\n', 'from pathlib import Path\nimport os\n', 1)
+s = s.replace(
+    'DEFAULT_ESM2_MODEL = "facebook/esm2_t33_650M_UR50D"',
+    'DEFAULT_ESM2_MODEL = os.environ.get("NESSO_ESM2_MODEL", "facebook/esm2_t33_650M_UR50D")',
+    1,
+)
+p.write_text(s)
+PY
+
+    python3 -m pip install --no-cache-dir --no-deps /opt/nesso
+    python3 -m pip install --no-cache-dir \
+        'numpy>=2.0' 'lightning>=2.6.0' 'rdkit>=2024.3.2' \
+        'einops>=0.8.0' 'mashumaro>=3.14' 'safetensors>=0.7.0' \
+        'transformers>=4.40.0' 'scipy>=1.13.0' pyyaml 'click>=8.1.7' \
+        tqdm 'huggingface_hub>=1.5.0' \
+        cuequivariance-torch cuequivariance-ops-torch-cu12
+
+%environment
+    export PYTHONDONTWRITEBYTECODE=1
+    export TOKENIZERS_PARALLELISM=false
+    export NESSO_ESM2_MODEL=/models/esm2_t33_650M_UR50D
+    export NESSO_CACHE=/work/cache
+
+%runscript
+    exec /usr/bin/python3 -m nesso.main "$@"
+
+%test
+    /usr/bin/python3 - <<'PY'
+import platform
+import nesso
+import rdkit
+import torch
+import transformers
+assert platform.machine() == 'aarch64'
+print(platform.machine(), torch.__version__, transformers.__version__, rdkit.__version__)
+PY
+    test -f /opt/nesso/README.md
+    test -f /opt/nesso/docs/prediction.md

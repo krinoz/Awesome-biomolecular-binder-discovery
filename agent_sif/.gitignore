@@ -1,0 +1,12 @@
+build-context/
+*.sif
+*.tar
+*.tar.gz
+*.tar.zst
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.lmdb
+__pycache__/
+.env

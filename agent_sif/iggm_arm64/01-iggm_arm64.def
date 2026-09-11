@@ -1,0 +1,48 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/dgl:23.07-py3
+
+%labels
+    org.opencontainers.image.source https://github.com/TencentAI4S/IgGM
+    org.opencontainers.image.revision 06abc563b3fc8c7ea020543add16b69b6f8a1c8d
+    org.opencontainers.image.title IgGM ARM64 runtime for Isambard GH200
+    org.opencontainers.image.architecture arm64
+    org.opencontainers.image.base.name nvcr.io/nvidia/dgl:23.07-py3
+
+%files
+    build-context/IgGM-src.tar /IgGM-src.tar
+
+%post
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+    export PIP_NO_CACHE_DIR=1
+    apt-get update
+    apt-get install --no-install-recommends -y ca-certificates git
+    rm -rf /var/lib/apt/lists/*
+    mkdir -p /opt/IgGM
+    tar -xf /IgGM-src.tar -C /opt/IgGM
+    rm -f /IgGM-src.tar
+    python -m pip install --no-cache-dir \
+        biopython==1.84 \
+        dm-tree==0.1.8 \
+        ml-collections==0.1.1 \
+        termcolor==2.4.0 \
+        PyYAML==6.0.2 \
+        requests==2.32.3 \
+        tqdm==4.66.4 \
+        openmm==8.5.2 \
+        git+https://github.com/openmm/pdbfixer.git@1.9
+    mkdir -p /opt/IgGM/checkpoints /work/results /work/tmp
+    chmod -R a+rX /opt/IgGM
+
+%environment
+    export PYTHONPATH=/opt/IgGM:${PYTHONPATH:-}
+    export PYTHONDONTWRITEBYTECODE=1
+    export MPLCONFIGDIR=/tmp/matplotlib
+
+%runscript
+    cd /opt/IgGM
+    exec python design.py "$@"
+
+%test
+    cd /opt/IgGM
+    python -c "import platform, torch, IgGM; from IgGM.deploy import AbDesigner; assert platform.machine() == 'aarch64'; print(platform.machine(), torch.__version__, torch.version.cuda)"

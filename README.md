@@ -21,6 +21,7 @@ This repository aims to be a **one-stop reference** that:
 
 In addition to the catalogue below, this repo now ships:
 
+- **[`agent_sif/`](agent_sif/)** — English build records for 24 retained ARM64 SIFs, including recovered recipes, supporting code, external-weight conventions, and explicit reconstruction limitations.
 - 📦 **[`containers/`](containers/)** — Docker + Apptainer recipes for the canonical protein-design and small-molecule stacks, with multi-tool `docker-compose` orchestration.
 - 📖 **[`guide/`](guide/)** — *A Hitchhiker's Guide to Deep-Learning Based Biomolecular Binder Design* — a goal-oriented walkthrough of the full pipeline, with worked examples and a tool-selection decision matrix.
 
