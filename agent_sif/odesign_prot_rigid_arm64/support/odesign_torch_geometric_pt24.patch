@@ -1,0 +1,30 @@
+--- opt/envs/odesign/lib/python3.10/site-packages/torch_geometric/typing.py
++++ opt/envs/odesign/lib/python3.10/site-packages/torch_geometric/typing.py
+@@ -430,4 +430,4 @@
+-if WITH_PT24:
++if WITH_PT24 and hasattr(torch.serialization, "add_safe_globals"):
+     torch.serialization.add_safe_globals([
+         SparseTensor,
+         SparseStorage,
+--- opt/envs/odesign/lib/python3.10/site-packages/torch_geometric/__init__.py
++++ opt/envs/odesign/lib/python3.10/site-packages/torch_geometric/__init__.py
+@@ -71,4 +71,4 @@
+-if torch_geometric.typing.WITH_PT24:
++if torch_geometric.typing.WITH_PT24 and hasattr(torch.serialization, "add_safe_globals"):
+     torch.serialization.add_safe_globals([
+         dict,
+         list,
+--- opt/envs/odesign/lib/python3.10/site-packages/torch_geometric/data/__init__.py
++++ opt/envs/odesign/lib/python3.10/site-packages/torch_geometric/data/__init__.py
+@@ -76,4 +76,4 @@
+-if torch_geometric.typing.WITH_PT24:
++if torch_geometric.typing.WITH_PT24 and hasattr(torch.serialization, "add_safe_globals"):
+     torch.serialization.add_safe_globals([
+         Data,
+         HeteroData,
+--- opt/envs/odesign/lib/python3.10/site-packages/torch_geometric/llm/large_graph_indexer.py
++++ opt/envs/odesign/lib/python3.10/site-packages/torch_geometric/llm/large_graph_indexer.py
+@@ -69,2 +69,2 @@
+-if WITH_PT24:
++if WITH_PT24 and hasattr(torch.serialization, "add_safe_globals"):
+     torch.serialization.add_safe_globals([MappedFeature])

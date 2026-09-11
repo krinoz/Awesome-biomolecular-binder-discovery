@@ -1,0 +1,77 @@
+Bootstrap: localimage
+From: build-context/parent.sif
+
+%labels
+    org.opencontainers.image.title PPIformer mutation ddG inference for Isambard GH200
+    org.opencontainers.image.source https://github.com/anton-bushuiev/PPIformer
+    org.opencontainers.image.revision e324f5f30dd0dae55d194ac6b4d18c772219c3ee
+    org.opencontainers.image.architecture arm64
+    org.opencontainers.image.note Runtime only; official PPIformer checkpoints are external read-only mounts
+
+%files
+    build-context/PPIformer-e324f5f3.tar.gz /opt/src/PPIformer.tar.gz
+    build-context/equiformer-pytorch-2a81808b.tar.gz /opt/src/equiformer-pytorch.tar.gz
+    build-context/mutils-c3b99888.tar.gz /opt/src/mutils.tar.gz
+    build-context/PPIRef-a2a5b6d0.tar.gz /opt/src/PPIRef.tar.gz
+    build-context/ppiformer_run.py /opt/ppiformer/ppiformer_run.py
+
+%post
+    set -eux
+    export PIP_CONFIG_FILE=/dev/null
+    export PIP_INDEX_URL=https://pypi.org/simple
+    unset PIP_EXTRA_INDEX_URL
+    mkdir -p /opt/PPIformer /opt/vendor/equiformer-pytorch /opt/vendor/mutils /opt/vendor/PPIRef /opt/ppiformer /models /work/cache/pyg /work/results
+    tar --no-same-owner --strip-components=1 -xzf /opt/src/PPIformer.tar.gz -C /opt/PPIformer
+    tar --no-same-owner --strip-components=1 -xzf /opt/src/equiformer-pytorch.tar.gz -C /opt/vendor/equiformer-pytorch
+    tar --no-same-owner --strip-components=1 -xzf /opt/src/mutils.tar.gz -C /opt/vendor/mutils
+    tar --no-same-owner --strip-components=1 -xzf /opt/src/PPIRef.tar.gz -C /opt/vendor/PPIRef
+    rm -rf /opt/src
+
+    python3 -m venv --system-site-packages /opt/envs/ppiformer
+    /opt/envs/ppiformer/bin/pip install --no-cache-dir --upgrade 'pip<26' 'setuptools<81' wheel
+    # Keep the CUDA-enabled NGC torch/torch-geometric inherited from the
+    # ODesign base.  These packages have broad dependency metadata that would
+    # otherwise make pip install a CPU-only torch wheel into the child venv.
+    /opt/envs/ppiformer/bin/pip install --no-cache-dir \
+        numpy==1.26.4 pandas==1.5.3 scipy==1.12.0 scikit-learn==1.4.2 \
+        pydantic==1.10.12 biopython==1.81 biopandas==0.5.2 \
+        mmtf-python==1.1.3 deepdiff==6.3.0 loguru==0.7.0 \
+        looseversion==1.1.2 multipledispatch==0.6.0 seaborn==0.12.2 \
+        plotly==5.14.1 requests-cache==1.0.1 rich-click==1.6.1 \
+        xarray==2023.5.0 wget==3.2 jaxtyping==0.2.21 \
+        beartype==0.15.0 hydra-core==1.3.2 \
+        hydra-submitit-launcher==1.2.0 einops==0.8.1
+    /opt/envs/ppiformer/bin/pip install --no-cache-dir --no-deps \
+        pytorch-lightning==2.0.8 torchmetrics==1.1.0 graphein==1.7.6 \
+        torch-geometric==2.3.1
+    # The parent image keeps its CUDA torch-geometric stack in the ODesign
+    # venv rather than the global NGC site-packages.  Add it after the child
+    # venv's packages so PPIformer keeps its own pinned Python dependencies.
+    printf '%s\n' /opt/envs/odesign/lib/python3.10/site-packages \
+        > /opt/envs/ppiformer/lib/python3.10/site-packages/odesign_base.pth
+    /opt/envs/ppiformer/bin/pip install --no-cache-dir --no-deps \
+        -e /opt/vendor/equiformer-pytorch \
+        -e /opt/vendor/mutils \
+        -e /opt/vendor/PPIRef \
+        -e /opt/PPIformer
+    chmod -R a+rX /opt/PPIformer /opt/vendor /opt/ppiformer /opt/envs/ppiformer
+    chmod -R a+rwx /work
+    rm -rf /root/.cache/pip
+
+%environment
+    export PYTHONPATH=/opt/PPIformer:/opt/vendor/equiformer-pytorch:/opt/vendor/mutils:/opt/vendor/PPIRef:$PYTHONPATH
+    export PYTHONUNBUFFERED=1
+    export PYTHONDONTWRITEBYTECODE=1
+    export PYTHONNOUSERSITE=1
+    export PPIFORMER_WEIGHTS_DIR=/models/ddg_regression
+    export PPIFORMER_CACHE_DIR=/work/cache/pyg
+    export MPLCONFIGDIR=/work/cache/matplotlib
+    export XDG_CACHE_HOME=/work/cache
+    export TMPDIR=/tmp
+
+%runscript
+    exec /opt/envs/ppiformer/bin/python /opt/ppiformer/ppiformer_run.py "$@"
+
+%test
+    /opt/envs/ppiformer/bin/python -c 'import platform, torch, torch_geometric, graphein, ppiformer, ppiref, mutils, equiformer_pytorch; assert platform.machine()=="aarch64"; assert torch.version.cuda'
+    /opt/envs/ppiformer/bin/python /opt/ppiformer/ppiformer_run.py --help >/dev/null

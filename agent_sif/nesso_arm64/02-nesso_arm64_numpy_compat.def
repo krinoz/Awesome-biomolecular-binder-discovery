@@ -1,0 +1,19 @@
+Bootstrap: localimage
+From: build-context/parent.sif
+
+%post
+    set -eux
+    # NGC 25.06 Torch was built against the NumPy 1.x C API. Nesso only uses
+    # APIs available in 1.26, while Torch<->NumPy conversion is required by
+    # its featurizer, so use the compatible ABI here.
+    python3 -m pip install --no-cache-dir --force-reinstall 'numpy==1.26.4'
+
+%test
+    /usr/bin/python3 - <<'PY'
+import numpy as np
+import torch
+x = torch.from_numpy(np.asarray([1.0], dtype=np.float32))
+assert x.item() == 1.0
+import nesso
+print(np.__version__, torch.__version__)
+PY

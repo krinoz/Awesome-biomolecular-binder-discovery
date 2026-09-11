@@ -1,0 +1,49 @@
+Bootstrap: docker
+From: docker.io/library/python:3.10-slim
+
+%files
+    build-context/sequence_structure_search_server.py /opt/search_mcp/server.py
+    build-context/SEARCH_GUIDE.md /opt/docs/SEARCH_GUIDE.md
+
+%post
+    set -eu
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates curl tar gzip mmseqs2
+    rm -rf /var/lib/apt/lists/*
+    python -m pip install --no-cache-dir fastmcp==3.4.7 requests==2.32.5
+
+    mkdir -p /opt/search_mcp /opt/docs/mmseqs2 /opt/docs/foldseek /opt/docs/foldmason /opt/docs/folddisco /opt/docs/riboseek
+
+    curl -L --fail --retry 3 -o /tmp/foldseek.tar.gz https://github.com/steineggerlab/foldseek/releases/download/10-941cd33/foldseek-linux-arm64.tar.gz
+    curl -L --fail --retry 3 -o /tmp/foldmason.tar.gz https://github.com/steineggerlab/foldmason/releases/download/4-dd3c235/foldmason-linux-arm64.tar.gz
+    curl -L --fail --retry 3 -o /tmp/folddisco.tar.gz https://github.com/steineggerlab/folddisco/releases/download/2-9375a2d/folddisco-linux-arm64.tar.gz
+    curl -L --fail --retry 3 -o /tmp/riboseek.tar.gz https://github.com/steineggerlab/riboseek/releases/download/v1.0.1/riboseek-linux-arm64.tar.gz
+
+    tar xzf /tmp/foldseek.tar.gz -C /opt
+    tar xzf /tmp/foldmason.tar.gz -C /opt
+    tar xzf /tmp/folddisco.tar.gz -C /opt
+    tar xzf /tmp/riboseek.tar.gz -C /opt
+    rm -f /tmp/foldseek.tar.gz /tmp/foldmason.tar.gz /tmp/folddisco.tar.gz /tmp/riboseek.tar.gz
+
+    curl -L --fail --retry 3 -o /opt/docs/mmseqs2/README.md https://raw.githubusercontent.com/MacromNex/mmseqs2_mcp/9cb7fb5addb27a97e03af57749b08ee3a1dab92d/README.md
+    curl -L --fail --retry 3 -o /opt/docs/mmseqs2/detail.md https://raw.githubusercontent.com/MacromNex/mmseqs2_mcp/9cb7fb5addb27a97e03af57749b08ee3a1dab92d/detail.md
+    cp /opt/foldseek/README.md /opt/docs/foldseek/README.md
+    cp /opt/foldmason/README.md /opt/docs/foldmason/README.md
+    cp /opt/folddisco/README.md /opt/docs/folddisco/README.md
+    curl -L --fail --retry 3 -o /opt/docs/riboseek/README.md https://raw.githubusercontent.com/steineggerlab/riboseek/v1.0.1/README.md
+
+    chmod 755 /opt/search_mcp/server.py /opt/foldseek/bin/foldseek /opt/foldmason/bin/foldmason /opt/folddisco/bin/folddisco /opt/riboseek/bin/riboseek
+    chmod -R a+rX /opt/docs
+
+%environment
+    export PYTHONPATH=/opt/search_mcp
+    export MMSEQS2_DB_PATH=/data/uniref100/uniref100.fasta.db_padded
+    export FOLDSEEK_API_BASE=https://search.foldseek.com/api
+
+%runscript
+    exec /usr/local/bin/python /opt/search_mcp/server.py "$@"
+
+%labels
+    org.opencontainers.image.title "MMseqs2 and Foldseek family MCP"
+    org.opencontainers.image.description "ARM64 MMseqs2 MSA plus Foldseek, FoldMason, Folddisco and Riboseek local binaries and remote public-search interfaces"
+    org.opencontainers.image.version "2026-08-27"

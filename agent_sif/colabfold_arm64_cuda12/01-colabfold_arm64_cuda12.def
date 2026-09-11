@@ -1,0 +1,43 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:25.06-py3
+
+%labels
+    org.opencontainers.image.title ColabFold ARM64 CUDA12 for Isambard GH200
+    org.opencontainers.image.source https://github.com/sokrypton/ColabFold
+    org.opencontainers.image.revision 0c788a0e8dca909f2c669784f9dd38e8c9682ff0
+    org.opencontainers.image.architecture arm64
+    org.opencontainers.image.note Official ColabFold pip route, remote MMseqs2 MSA only
+
+%files
+    build-context/colabfold /opt/colabfold
+
+%post
+    set -eux
+    export PIP_CONFIG_FILE=/dev/null
+    export PIP_INDEX_URL=https://pypi.org/simple
+    unset PIP_EXTRA_INDEX_URL
+    python3 -m venv /opt/colabfold-venv
+    /opt/colabfold-venv/bin/pip install --no-cache-dir --upgrade pip
+    /opt/colabfold-venv/bin/pip install --no-cache-dir \
+        '/opt/colabfold[alphafold,openmm]' \
+        'jax[cuda12]<0.11' \
+        'openmm[cuda12]'
+    mkdir -p /work/cache
+    chmod -R a+rX /opt/colabfold /opt/colabfold-venv
+    chmod -R a+rwx /work
+
+%environment
+    export PYTHONPATH=/opt/colabfold
+    export PYTHONNOUSERSITE=1
+    export PYTHONDONTWRITEBYTECODE=1
+    export XDG_CACHE_HOME=/work/cache
+    export COLABFOLD_CACHE=/work/cache
+    export JAX_COMPILATION_CACHE_DIR=/work/cache/jax
+    export MPLCONFIGDIR=/work/cache/matplotlib
+
+%runscript
+    exec "$@"
+
+%test
+    /opt/colabfold-venv/bin/python -c 'import colabfold, jax, openmm; print(jax.__version__, openmm.version.version)'
+    /opt/colabfold-venv/bin/colabfold_batch --help >/dev/null

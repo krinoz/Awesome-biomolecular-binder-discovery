@@ -1,0 +1,26 @@
+Bootstrap: localimage
+From: build-context/parent.sif
+
+%labels
+    org.opencontainers.image.title DISCO multimodal protein co-design for Isambard GH200
+    org.opencontainers.image.source https://github.com/DISCO-design/DISCO
+    org.opencontainers.image.revision 82b594f838eb61dd8c78ae3a403ccb8f00cf7abf
+    org.opencontainers.image.architecture arm64
+    org.opencontainers.image.note Runtime only; external DISCO and DPLM weights; ARM64 Xrender runtime fix
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends libxrender1
+    rm -rf /var/lib/apt/lists/*
+    mkdir -p /work/cache/triton
+    chmod -R a+rwx /work
+
+%environment
+    export TRITON_CACHE_DIR=/work/cache/triton
+
+%test
+    /opt/envs/disco/bin/python -c 'from rdkit.Chem.Draw import rdMolDraw2D; import platform, torch; assert platform.machine()=="aarch64"; assert torch.version.cuda'
+    TRITON_CACHE_DIR=/work/cache/triton /opt/envs/disco/bin/python -c 'import disco, runner, openfold, LigandMPNN, deepspeed, biotite, gemmi'
+    /opt/envs/disco/bin/python /opt/disco/disco_run.py --help >/dev/null

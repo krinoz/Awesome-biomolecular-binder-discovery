@@ -1,0 +1,91 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:25.06-py3
+
+%labels
+    org.opencontainers.image.title Boltz family for Isambard GH200
+    org.opencontainers.image.source https://github.com/HannesStark/boltzgen
+    org.opencontainers.image.architecture arm64
+    org.opencontainers.image.version boltzgen-v0.3.2-boltz2-v2.2.1
+    org.opencontainers.image.description One shared Python environment with runnable BoltzGen 0.3.2 and official standalone Boltz 2.2.1; full source and documentation included, weights external
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    export PIP_CONFIG_FILE=/dev/null
+    export PIP_INDEX_URL=https://pypi.org/simple
+    unset PIP_EXTRA_INDEX_URL
+
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates curl git libgomp1
+    rm -rf /var/lib/apt/lists/*
+
+    base_torch=$(python3 -c 'import torch; print(torch.__version__.split("+")[0])')
+    printf 'torch==%s\n' "$base_torch" >/tmp/torch-constraint.txt
+
+    python3 -m venv --system-site-packages /opt/envs/boltzgen
+    /opt/envs/boltzgen/bin/pip install --no-cache-dir --upgrade pip 'setuptools<81' wheel
+    /opt/envs/boltzgen/bin/pip install --no-cache-dir -c /tmp/torch-constraint.txt \
+        fastmcp==2.13.3 loguru==0.7.3 boltzgen==0.3.2
+    /opt/envs/boltzgen/bin/pip install --no-cache-dir --no-deps numpy==1.26.4
+
+    git clone --depth 1 --branch v0.3.2 \
+        https://github.com/HannesStark/boltzgen.git /opt/upstream/boltzgen
+    git clone --depth 1 --branch v2.2.1 \
+        https://github.com/jwohlwend/boltz.git /opt/upstream/boltz2
+
+    # BoltzGen and official Boltz run in this same venv.  Keep the newer
+    # BoltzGen-compatible scientific stack already installed above and add
+    # only Boltz's missing runtime dependencies before installing the pinned
+    # official source without asking pip to replace the shared CUDA/PyTorch
+    # environment.
+    /opt/envs/boltzgen/bin/pip install --no-cache-dir -c /tmp/torch-constraint.txt \
+        pytorch-lightning==2.5.0 fairscale==0.4.13 modelcif==1.2 wandb==0.18.7 \
+        chembl_structure_pipeline==1.2.2 types-requests
+    /opt/envs/boltzgen/bin/pip install --no-cache-dir --no-deps /opt/upstream/boltz2
+
+    rm -rf /opt/upstream/boltzgen/.git /opt/upstream/boltz2/.git
+
+    mkdir -p /opt/model-cache/boltzgen /opt/model-cache/boltz2
+    # Keep the official Boltz-2 CCD library in the immutable image so its
+    # ~45k small files do not consume Lustre inodes.  Model checkpoints remain
+    # external and are mounted individually by the launcher.
+    curl -fL --retry 5 --retry-all-errors \
+        -o /tmp/boltz2-mols.tar \
+        https://huggingface.co/boltz-community/boltz-2/resolve/main/mols.tar
+    tar -xf /tmp/boltz2-mols.tar -C /opt/model-cache/boltz2
+    rm -f /tmp/boltz2-mols.tar
+    # Boltz checks for this filename before checking the extracted directory.
+    # The empty marker prevents a read-only SIF from attempting to download
+    # the same archive again; inference reads the extracted mols/ files.
+    touch /opt/model-cache/boltz2/mols.tar
+    chmod -R a+rX /opt/envs /opt/upstream
+    chmod -R a+rwX /opt/model-cache/boltzgen /opt/model-cache/boltz2
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export PYTHONDONTWRITEBYTECODE=1
+    export HF_HOME=/opt/model-cache/boltzgen
+    export BOLTZ_CACHE=/opt/model-cache/boltz2
+    export XDG_CACHE_HOME=/tmp/.cache
+    export MPLCONFIGDIR=/tmp/matplotlib
+    export TORCHINDUCTOR_CACHE_DIR=/tmp/torch_inductor
+    export TRITON_HOME=/tmp/triton
+
+%runscript
+    if [ "$#" -eq 0 ]; then
+        exec /bin/bash
+    fi
+    exec "$@"
+
+%test
+    /opt/envs/boltzgen/bin/python -c \
+        'import torch, boltz, boltzgen, fastmcp; from boltz.model.models.boltz2 import Boltz2; from boltzgen.model.modules import affinity, inverse_fold; assert torch.version.cuda'
+    /opt/envs/boltzgen/bin/boltz --help >/dev/null
+    /opt/envs/boltzgen/bin/boltzgen --help >/dev/null
+    test -f /opt/upstream/boltzgen/README.md
+    test -f /opt/upstream/boltz2/README.md
+    test -f /opt/upstream/boltz2/src/boltz/main.py
+    test -d /opt/upstream/boltz2/docs
+    test -f /opt/model-cache/boltz2/mols/ALA.pkl
+    test -f /opt/model-cache/boltz2/mols/BTN.pkl
+    test -f /opt/model-cache/boltz2/mols.tar

@@ -1,0 +1,14 @@
+PeSTo_Inference https://github.com/LBM-EPFL/PeSTo_Inference.git
+commit 5f8ebe0597f256b8b76b3a4c8027bfb855d9d24b
+
+PeSTo i_v4_1 checkpoint
+external path models/pesto/i_v4_1/model_ckpt.pt
+
+P2Rank https://github.com/rdk/p2rank
+release 2.5.1
+asset p2rank_2.5.1.tar.gz
+
+fpocket https://github.com/Discngine/fpocket
+commit 4bb0d8447f62fee77e2c3c29f54b5fcaf5e2c066
+not embedded: upstream molfile static library is LINUXAMD64/x86-64 and the
+repository does not carry a complete Linux ARM64 replacement.

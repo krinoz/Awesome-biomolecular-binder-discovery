@@ -1,0 +1,21 @@
+Bootstrap: localimage
+From: build-context/parent.sif
+
+%labels
+    org.opencontainers.image.title PPIformer mutation ddG inference for Isambard GH200
+    org.opencontainers.image.source https://github.com/anton-bushuiev/PPIformer
+    org.opencontainers.image.revision e324f5f30dd0dae55d194ac6b4d18c772219c3ee
+    org.opencontainers.image.architecture arm64
+    org.opencontainers.image.note Runtime only; external official checkpoints; official torch-geometric 2.3.1 compatibility layer
+
+%post
+    set -eux
+    export PIP_CONFIG_FILE=/dev/null
+    export PIP_INDEX_URL=https://pypi.org/simple
+    unset PIP_EXTRA_INDEX_URL
+    /opt/envs/ppiformer/bin/pip install --no-cache-dir --no-deps --force-reinstall torch-geometric==2.3.1
+    rm -rf /root/.cache/pip
+
+%test
+    /opt/envs/ppiformer/bin/python -c 'import torch, torch_geometric; from ppiformer.data.transforms import PreEquiformerTransform; assert torch.version.cuda; assert torch_geometric.__version__ == "2.3.1"; assert not PreEquiformerTransform.__abstractmethods__'
+    /opt/envs/ppiformer/bin/python /opt/ppiformer/ppiformer_run.py --help >/dev/null

@@ -1,0 +1,21 @@
+Bootstrap: localimage
+From: build-context/parent.sif
+
+%environment
+    export PYTHONNOUSERSITE=1
+
+%test
+    python3 - <<'PY'
+import site
+import lightning
+import nesso
+import numpy
+import torch
+
+assert site.ENABLE_USER_SITE is False
+assert lightning.__file__.startswith("/usr/local/")
+assert nesso.__file__.startswith("/usr/local/")
+assert numpy.__version__ == "1.26.4"
+assert torch.from_numpy(numpy.array([1.0], dtype=numpy.float32)).item() == 1.0
+print("nesso-container-stack-ok")
+PY

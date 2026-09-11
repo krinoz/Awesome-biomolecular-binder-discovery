@@ -1,0 +1,76 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:25.06-py3
+
+%labels
+    org.opencontainers.image.title DISCO multimodal protein co-design for Isambard GH200
+    org.opencontainers.image.source https://github.com/DISCO-design/DISCO
+    org.opencontainers.image.revision 82b594f838eb61dd8c78ae3a403ccb8f00cf7abf
+    org.opencontainers.image.architecture arm64
+    org.opencontainers.image.note Runtime only; DISCO.pt and DPLM-650M snapshots are external read-only mounts
+
+%files
+    build-context/DISCO-82b594f8.tar.gz /opt/DISCO.tar.gz
+    build-context/disco_plm.py /opt/disco/plm.py
+    build-context/disco_run.py /opt/disco/disco_run.py
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build git ca-certificates curl \
+        libgl1 libglib2.0-0 libxrender1 libjpeg-dev libpng-dev
+    rm -rf /var/lib/apt/lists/*
+
+    mkdir -p /opt/DISCO /opt/disco /work/cache/triton /work/results /work/torch_extensions /models
+    tar --no-same-owner --strip-components=1 -xzf /opt/DISCO.tar.gz -C /opt/DISCO
+    rm -f /opt/DISCO.tar.gz
+    cp /opt/disco/plm.py /opt/DISCO/disco/model/modules/plm.py
+
+    python3 -m venv --system-site-packages /opt/envs/disco
+    /opt/envs/disco/bin/pip install --no-cache-dir --upgrade 'pip<26' 'setuptools<81' wheel packaging hatchling
+    /opt/envs/disco/bin/pip install --no-cache-dir \
+        accelerate==1.12.0 biopython==1.83 biotite==1.4.0 dm-tree==0.1.9 \
+        fasteners==0.20 freesasa==2.2.1 gemmi==0.6.7 hydra-core==1.3.2 \
+        icecream==2.1.8 lightning==2.6.0 ml-collections==1.1.0 modelcif==1.6 \
+        multimolecule==0.0.8 ninja==1.13.0 'numpy<2' pandas==2.3.3 \
+        pdbeccdutils==1.0.0 prody==2.6.1 pyrootutils==1.0.4 rich==14.2.0 \
+        rootutils==1.0.7 scikit-learn==1.8.0 scipy==1.16.3 \
+        sentencepiece==0.2.1 torchdata==0.11.0 torchinfo==1.8.0 \
+        transformers==4.57.6 wandb==0.23.1 fair-esm==2.0.0 deepspeed==0.18.3
+
+    /opt/envs/disco/bin/pip install --no-cache-dir --no-deps \
+        -e /opt/DISCO/packages/openfold \
+        -e /opt/DISCO/packages/LigandMPNN \
+        -e /opt/DISCO/runner \
+        -e /opt/DISCO
+
+    git clone --depth 1 --branch v3.5.1 https://github.com/NVIDIA/cutlass.git /opt/cutlass
+    chmod -R a+rX /opt/DISCO /opt/disco /opt/cutlass /opt/envs/disco
+    chmod -R a+rwx /work
+    rm -rf /root/.cache/pip
+
+%environment
+    export PYTHONPATH=/opt/DISCO:$PYTHONPATH
+    export PYTHONUNBUFFERED=1
+    export PYTHONDONTWRITEBYTECODE=1
+    export PYTHONNOUSERSITE=1
+    export DISCO_DPLM_PATH=/models/dplm_650m
+    export CUTLASS_PATH=/opt/cutlass
+    export HF_HUB_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
+    export WANDB_MODE=offline
+    export HF_HOME=/work/cache/huggingface
+    export XDG_CACHE_HOME=/work/cache
+    export TORCH_HOME=/work/cache/torch
+    export TORCH_EXTENSIONS_DIR=/work/torch_extensions
+    export TRITON_CACHE_DIR=/work/cache/triton
+    export TMPDIR=/tmp
+
+%runscript
+    exec /opt/envs/disco/bin/python /opt/disco/disco_run.py "$@"
+
+%test
+    /opt/envs/disco/bin/python -c 'import platform, torch; assert platform.machine()=="aarch64"; assert torch.version.cuda'
+    /opt/envs/disco/bin/python -c 'import disco, runner, openfold, LigandMPNN, deepspeed, biotite, gemmi'
+    /opt/envs/disco/bin/python /opt/disco/disco_run.py --help >/dev/null

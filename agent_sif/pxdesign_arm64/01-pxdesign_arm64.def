@@ -1,0 +1,91 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:25.06-py3
+
+%labels
+    org.opencontainers.image.title PXDesign and Protenix runtime for Isambard GH200
+    org.opencontainers.image.source https://github.com/bytedance/PXDesign
+    org.opencontainers.image.revision f788441313c84c3074fe9596ac2433f96b15c763
+    org.opencontainers.image.architecture arm64
+    org.opencontainers.image.pxdesignbench.revision f6d0d72496c23ca1374df5943754f3454ae8c549
+    org.opencontainers.image.protenix.revision d18aa1daadd02a001b32bc7fa2278fc8a2f8f025
+    org.opencontainers.image.colabdesign.revision e31a56fe1d9b4de25c8697f3a28b75892941cc72
+    org.opencontainers.image.note Official source pins with minimal ARM64 base-image substitution; model weights are external
+
+%files
+    build-context/PXDesign /opt/pxdesign
+    build-context/Protenix /opt/protenix
+    build-context/PXDesignBench /opt/pxdbench
+    build-context/ColabDesign /opt/colabdesign
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    export PIP_CONFIG_FILE=/dev/null
+    export PIP_INDEX_URL=https://pypi.org/simple
+    unset PIP_EXTRA_INDEX_URL
+
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        ca-certificates git build-essential cmake ninja-build libgomp1
+    rm -rf /var/lib/apt/lists/*
+
+    # Keep NVIDIA's native ARM64 CUDA PyTorch. The upstream Docker image and
+    # torch==2.3.1 CUDA wheels are amd64-oriented and are not usable on GH200.
+    python3 -m venv --system-site-packages /opt/envs/pxdesign
+    /opt/envs/pxdesign/bin/pip install --no-cache-dir --upgrade pip 'setuptools<81' wheel
+    base_torch=$(python3 -c 'import torch; print(torch.__version__.split("+")[0])')
+    printf 'torch==%s\n' "$base_torch" >/tmp/torch-constraint.txt
+
+    /opt/envs/pxdesign/bin/pip install --no-cache-dir -c /tmp/torch-constraint.txt \
+        PyYaml scipy ml_collections tqdm pandas optree rdkit \
+        biopython==1.83 modelcif==0.7 biotite==1.0.1 \
+        scikit-learn scikit-learn-extra protobuf==3.20.2 \
+        icecream ipdb wandb numpy==1.26.3 matplotlib==3.9.2 \
+        ipywidgets py3Dmol fair-esm posix_ipc einops \
+        transformers==4.51.3 optax==0.2.5 dm-haiku==0.0.13 \
+        natsort dm-tree click
+
+    # Install the exact official source revisions without allowing their
+    # torch/cuda metadata to replace the native NGC stack.
+    /opt/envs/pxdesign/bin/pip install --no-cache-dir --no-deps /opt/protenix
+    /opt/envs/pxdesign/bin/pip install --no-cache-dir --no-deps /opt/pxdbench
+    /opt/envs/pxdesign/bin/pip install --no-cache-dir --no-deps /opt/colabdesign
+    /opt/envs/pxdesign/bin/pip install --no-cache-dir --no-deps /opt/pxdesign
+
+    # Protenix v0.5.0+pxd imports the FlashAttention-1 symbol. NGC 25.06
+    # provides the same varlen KV-packed operation under its FlashAttention-2
+    # name. Preserve the upstream call signature through a narrow import alias.
+    sed -i \
+        's/from flash_attn.flash_attn_interface import flash_attn_unpadded_kvpacked_func/from flash_attn.flash_attn_interface import flash_attn_varlen_kvpacked_func as flash_attn_unpadded_kvpacked_func/' \
+        /opt/protenix/protenix/openfold_local/model/primitives.py
+
+    # The unoptimized attention and standard LayerNorm paths are the portable
+    # baseline. CUTLASS is retained at the official revision for later
+    # optional kernel validation, without compiling GPU kernels at build time.
+    git clone --depth=1 --branch v3.5.1 https://github.com/NVIDIA/cutlass.git /opt/cutlass
+
+    mkdir -p /work/weights /work/cache /work/results
+    chmod -R a+rX /opt/pxdesign /opt/protenix /opt/pxdbench /opt/colabdesign /opt/envs /opt/cutlass
+    chmod -R a+rwx /work
+    rm -rf /root/.cache/pip
+
+%environment
+    export PYTHONPATH=/opt/pxdesign:/opt/protenix:/opt/pxdbench
+    export PYTHONUNBUFFERED=1
+    export PYTHONDONTWRITEBYTECODE=1
+    export PYTHONNOUSERSITE=1
+    export CUTLASS_PATH=/opt/cutlass
+    export PROTENIX_DATA_ROOT_DIR=/work/cache
+    export XDG_CACHE_HOME=/work/cache
+    export TORCH_HOME=/work/cache/torch
+    export MPLCONFIGDIR=/work/cache/matplotlib
+    export TMPDIR=/tmp
+    export USE_DEEPSPEED_EVO_ATTENTION=false
+
+%runscript
+    exec "$@"
+
+%test
+    /opt/envs/pxdesign/bin/python -c 'import torch, protenix, pxdbench, pxdesign; assert torch.version.cuda; print(torch.__version__, pxdesign.__version__ if hasattr(pxdesign, "__version__") else "pxdesign")'
+    /opt/envs/pxdesign/bin/pxdesign --help >/dev/null
+    /opt/envs/pxdesign/bin/protenix --help >/dev/null

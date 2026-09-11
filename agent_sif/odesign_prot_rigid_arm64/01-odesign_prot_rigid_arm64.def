@@ -1,0 +1,79 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:24.05-py3
+
+%labels
+    org.opencontainers.image.title ODesign rigid-protein inference for Isambard GH200
+    org.opencontainers.image.source https://github.com/OTeam-AI4S/ODesign
+    org.opencontainers.image.revision 87b67dec1a26c0915286bf47c3dc7102635ea0cc
+    org.opencontainers.image.architecture arm64
+    org.opencontainers.image.model odesign_base_prot_rigid
+    org.opencontainers.image.note Runtime only; ODesign, ProteinMPNN and LigandMPNN checkpoints plus CCD assets are external read-only mounts
+
+%files
+    build-context/ODesign-87b67dec.tar.gz /opt/ODesign.tar.gz
+    build-context/odesign_run.py /opt/odesign/odesign_run.py
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    export PIP_CONFIG_FILE=/dev/null
+    export PIP_INDEX_URL=https://pypi.org/simple
+    unset PIP_EXTRA_INDEX_URL
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build git ca-certificates curl python3-venv \
+        libgl1 libglib2.0-0 libjpeg-dev libpng-dev
+    rm -rf /var/lib/apt/lists/*
+
+    mkdir -p /opt/ODesign /opt/odesign /work/cache /work/results /ckpt /data
+    tar --no-same-owner --strip-components=1 -xzf /opt/ODesign.tar.gz -C /opt/ODesign
+    rm -f /opt/ODesign.tar.gz
+
+    python3 -m venv --system-site-packages /opt/envs/odesign
+    /opt/envs/odesign/bin/pip install --no-cache-dir --upgrade 'pip<26' 'setuptools<81' wheel 'packaging<=24.2'
+    /opt/envs/odesign/bin/pip install --no-cache-dir \
+        antlr4-python3-runtime==4.9.3 hydra-core==1.3.2 omegaconf==2.3.0 \
+        ml-collections==1.0.0 numpy==1.26.3 scipy==1.15.2 pandas==2.2.3 \
+        biopython==1.83 biotite==1.0.1 biotraj==1.2.2 gemmi==0.6.5 \
+        pdbeccdutils==0.8.5 rdkit==2024.3.6 modelcif==0.7 ihm==2.2 \
+        optree==0.14.1 networkx==3.3 einops==0.8.1 prody==2.6.1 \
+        lovely-tensors==0.1.18 fair-esm==2.0.0 rich==14.2.0 tqdm==4.67.1 \
+        pytorch-lightning==1.9.0 torchmetrics==1.8.2 wandb==0.19.8 \
+        transformers==4.55.2 safetensors==0.7.0 torch-geometric==2.7.0 \
+        scikit-learn-extra==0.3.0 deepspeed==0.17.4 protobuf==3.20.2 \
+        icecream==2.1.4 ipdb==0.13.13 matplotlib==3.9.2 py3Dmol==2.4.2
+    # Keep the NGC ARM64 CUDA PyTorch already provided by the base image.
+    # Protenix pins a generic torch wheel in its metadata, which would shadow
+    # the tested NGC build and duplicate the CUDA runtime inside this SIF.
+    /opt/envs/odesign/bin/pip install --no-cache-dir --no-deps protenix==0.5.5
+
+    export MAX_JOBS=4
+    export FORCE_CUDA=1
+    export TORCH_CUDA_ARCH_LIST=9.0
+    /opt/envs/odesign/bin/pip install --no-cache-dir --no-build-isolation \
+        torch-scatter==2.1.2 torch-cluster==1.6.3
+
+    chmod -R a+rX /opt/ODesign /opt/odesign /opt/envs/odesign
+    chmod -R a+rwx /work
+    rm -rf /root/.cache/pip
+
+%environment
+    export PYTHONPATH=/opt/ODesign:$PYTHONPATH
+    export PYTHONUNBUFFERED=1
+    export PYTHONDONTWRITEBYTECODE=1
+    export PYTHONNOUSERSITE=1
+    export HF_HUB_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
+    export WANDB_MODE=offline
+    export HF_HOME=/work/cache/huggingface
+    export XDG_CACHE_HOME=/work/cache
+    export TORCH_HOME=/work/cache/torch
+    export TMPDIR=/tmp
+
+%runscript
+    exec /opt/envs/odesign/bin/python /opt/odesign/odesign_run.py "$@"
+
+%test
+    /opt/envs/odesign/bin/python -c 'import platform, torch; assert platform.machine()=="aarch64"; assert torch.version.cuda'
+    /opt/envs/odesign/bin/python -c 'import hydra, biotite, gemmi, rdkit, torch_geometric, torch_scatter, torch_cluster; import src.model.odesign'
+    /opt/envs/odesign/bin/python /opt/odesign/odesign_run.py --help >/dev/null

@@ -1,0 +1,117 @@
+Bootstrap: docker
+From: nvcr.io/nvidia/pytorch:25.06-py3
+
+%labels
+    org.opencontainers.image.title ConFDiff ESMFold runtime for Isambard GH200
+    org.opencontainers.image.source https://github.com/bytedance/ConfDiff
+    org.opencontainers.image.architecture arm64
+    org.opencontainers.image.variant confdiff-esm-r0-r3
+
+%files
+    build-context/ConfDiff /opt/confdiff
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    export PIP_CONFIG_FILE=/dev/null
+    export PIP_INDEX_URL=https://pypi.org/simple
+    unset PIP_EXTRA_INDEX_URL
+    apt-get update
+    apt-get install -y --no-install-recommends ca-certificates git build-essential ninja-build
+    rm -rf /var/lib/apt/lists/*
+
+    # Keep NVIDIA's native ARM64 CUDA PyTorch; the upstream Torch 2.0.1 pin has
+    # no usable Linux-aarch64 CUDA wheel. The ESMFold weights/representation
+    # contract below remains the official fair-esm 2.0 / esmfold_3B_v1 one.
+    python3 -m venv --system-site-packages /opt/envs/confdiff
+    /opt/envs/confdiff/bin/pip install --no-cache-dir --upgrade pip 'setuptools<81' wheel
+    /opt/envs/confdiff/bin/pip install --no-cache-dir \
+        numpy==1.26.4 biopython==1.83 fair-esm==2.0.0 \
+        easydict==1.10 hydra-core==1.3.2 hydra-colorlog==1.2.0 \
+        omegaconf==2.3.0 pyrootutils==1.0.4 pandas==2.2.3 \
+        scipy==1.14.1 scikit-learn==1.5.2 einops==0.7.0 \
+        dm-tree==0.1.8 ml-collections==0.1.1 modelcif==0.9 \
+        lightning==2.0.1 pytorch-lightning==2.0.1 torchmetrics==0.11.4 \
+        openmm==8.6.0 pdbfixer==1.12.0
+
+    # fair-esm 2.0 predates Python 3.12's stricter dataclass validation.
+    esm_trunk=/opt/envs/confdiff/lib/python3.12/site-packages/esm/esmfold/v1/trunk.py
+    sed -i 's/from dataclasses import dataclass/from dataclasses import dataclass, field/' "$esm_trunk"
+    sed -i 's/structure_module: StructureModuleConfig = StructureModuleConfig()/structure_module: StructureModuleConfig = field(default_factory=StructureModuleConfig)/' "$esm_trunk"
+    esm_model=/opt/envs/confdiff/lib/python3.12/site-packages/esm/esmfold/v1/esmfold.py
+    sed -i 's/from dataclasses import dataclass/from dataclasses import dataclass, field/' "$esm_model"
+    sed -i 's/trunk: T.Any = FoldingTrunkConfig()/trunk: T.Any = field(default_factory=FoldingTrunkConfig)/' "$esm_model"
+
+    # PyTorch 2.6+ defaults torch.load to weights_only=True.  Official
+    # fair-esm checkpoints contain argparse.Namespace metadata, so the
+    # upstream fair-esm 2.0 loader must explicitly use the trusted-checkpoint
+    # behavior it was written for.
+    esm_pretrained=/opt/envs/confdiff/lib/python3.12/site-packages/esm/pretrained.py
+    /opt/envs/confdiff/bin/python - "$esm_pretrained" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+replacements = {
+    'map_location="cpu",\n        )': 'map_location="cpu", weights_only=False,\n        )',
+    'torch.load(str(model_location), map_location="cpu")':
+        'torch.load(str(model_location), map_location="cpu", weights_only=False)',
+    'torch.load(regression_location, map_location="cpu")':
+        'torch.load(regression_location, map_location="cpu", weights_only=False)',
+}
+for old, new in replacements.items():
+    if old not in text:
+        raise SystemExit(f"expected fair-esm loader fragment is missing: {old!r}")
+    text = text.replace(old, new, 1)
+path.write_text(text)
+PY
+
+    # This is the small upstream implementation dependency required by legacy
+    # ESMFold itself; no OpenFold model, representation, or checkpoint is
+    # installed or exposed by this image.
+    git clone https://github.com/aqlaboratory/openfold.git /opt/esmfold-upstream
+    git -C /opt/esmfold-upstream checkout 4b41059694619831a7db195b7e0988fc4ff3a307
+    # The pinned legacy setup passes C++14 to nvcc, while the NGC Torch 2.8
+    # headers require C++17.
+    sed -i 's/-std=c++14/-std=c++17/g' /opt/esmfold-upstream/setup.py
+    # NGC ships a newer flash-attn API than this pinned ESMFold dependency
+    # expects. ESMFold uses the standard attention path here, so disable only
+    # the stale optional import instead of replacing the NGC package.
+    sed -i 's/fa_is_installed = importlib.util.find_spec("flash_attn") is not None/fa_is_installed = False/' \
+        /opt/esmfold-upstream/openfold/model/primitives.py
+    # This historical revision eagerly imports every module from package
+    # __init__ files, pulling in training-only Lightning APIs that changed
+    # after 2023. ESMFold imports the required submodules explicitly.
+    for init_file in \
+        /opt/esmfold-upstream/openfold/__init__.py \
+        /opt/esmfold-upstream/openfold/model/__init__.py \
+        /opt/esmfold-upstream/openfold/utils/__init__.py \
+        /opt/esmfold-upstream/openfold/np/__init__.py; do
+        sed -i '1,$d' "$init_file"
+    done
+    mkdir -p /opt/build-tmp
+    TMPDIR=/opt/build-tmp MAX_JOBS=4 /opt/envs/confdiff/bin/pip install \
+        --no-cache-dir --no-build-isolation -e /opt/esmfold-upstream
+    rm -rf /opt/build-tmp /root/.cache/pip
+
+    mkdir -p /opt/model-cache/esmfold
+    chmod -R a+rX /opt/confdiff /opt/esmfold-upstream /opt/envs
+    chmod -R a+rwx /opt/model-cache
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export PYTHONDONTWRITEBYTECODE=1
+    export PYTHONPATH=/opt/confdiff
+    export TORCH_HOME=/opt/model-cache/esmfold
+    export XDG_CACHE_HOME=/tmp/.cache
+    export MPLCONFIGDIR=/tmp/matplotlib
+    export TMPDIR=/tmp
+
+%runscript
+    cd /opt/confdiff
+    exec /opt/envs/confdiff/bin/python "$@"
+
+%test
+    cd /opt/confdiff
+    /opt/envs/confdiff/bin/python -c 'import torch, esm; from pretrain_repr.esmfold.esmfold import ESMFold; assert torch.version.cuda; print(torch.__version__, esm.__version__, ESMFold.__name__)'

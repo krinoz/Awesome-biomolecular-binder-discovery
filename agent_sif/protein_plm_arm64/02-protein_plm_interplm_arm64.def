@@ -1,0 +1,76 @@
+Bootstrap: localimage
+From: build-context/parent.sif
+
+%labels
+    org.opencontainers.image.title Protein PLM analysis runtime for Isambard GH200
+    org.opencontainers.image.source https://github.com/westlake-repl/SaProtHub,https://github.com/ElanaPearl/InterPLM
+    org.opencontainers.image.interplm.revision 5f4cbf90a0b3c1c031951ffd0b3b8e11b6f2ed61
+    org.opencontainers.image.architecture arm64
+    org.opencontainers.image.models ColabSaProt-35M,ColabSaProt-650M,ESM2-8M,ESM2-35M,ESM2-150M,ESM2-650M,InterPLM-SAE-8M,InterPLM-SAE-650M
+    org.opencontainers.image.note SaProtHub inference/LoRA/3Di plus InterPLM SAE inference, training and analysis; all model weights external and read-only
+
+%files
+    build-context/InterPLM-5f4cbf90.tar.gz /opt/InterPLM.tar.gz
+    build-context/interplm_run.py /opt/interplm/interplm_run.py
+    build-context/INTERPLM_CONTAINER_USAGE.md /opt/interplm/USAGE.md
+
+%post
+    set -eux
+    export PIP_CONFIG_FILE=/dev/null
+    export PIP_INDEX_URL=https://pypi.org/simple
+    unset PIP_EXTRA_INDEX_URL
+
+    mkdir -p /opt/InterPLM /opt/interplm /models/esm2 /models/interplm/sae /work/interplm
+    tar --no-same-owner --strip-components=1 -xzf /opt/InterPLM.tar.gz -C /opt/InterPLM
+    rm -f /opt/InterPLM.tar.gz
+
+    python3 -m venv --system-site-packages /opt/envs/interplm
+    /opt/envs/interplm/bin/pip install --no-cache-dir --upgrade \
+        pip 'setuptools<81' 'wheel<0.46' 'packaging<=24.2'
+    base_torch=$(python3 -c 'import torch; print(torch.__version__.split("+")[0])')
+    printf 'torch==%s\n' "$base_torch" >/tmp/interplm-torch-constraint.txt
+
+    # InterPLM's checked-in env pins transformers 4.57 with an older incompatible
+    # huggingface-hub. Use the minimum hub release accepted by transformers 4.57.
+    # Keep NumPy 1.26 because the inherited NGC PyTorch wheel was compiled against
+    # NumPy 1.x; upstream's NumPy 2 pin disables torch<->NumPy conversion here.
+    /opt/envs/interplm/bin/pip install --no-cache-dir \
+        -c /tmp/interplm-torch-constraint.txt \
+        'numpy==1.26.4' 'scipy==1.14.1' 'pandas==2.2.3' 'scikit-learn==1.6.1' \
+        'transformers==4.57.0' 'huggingface-hub==0.36.0' 'tokenizers==0.22.1' \
+        'safetensors==0.5.3' 'accelerate==1.8.1' 'nnsight==0.5.7' \
+        'fair-esm==2.0.0' 'biopython==1.84' 'datasets==3.2.0' \
+        'einops==0.8.0' 'h5py==3.12.1' 'pyyaml==6.0.2' 'tqdm==4.67.1' \
+        'multiprocess==0.70.16' 'dill==0.3.8' \
+        'typed-argument-parser==1.10.1' \
+        'umap-learn==0.5.8' 'streamlit==1.41.1' 'plotly==5.24.1' \
+        'matplotlib==3.10.0' 'seaborn==0.13.2' 'py3dmol==2.4.2' \
+        'wandb==0.19.1'
+    /opt/envs/interplm/bin/pip install --no-cache-dir --no-deps /opt/InterPLM
+    # Upstream's wheel metadata omits nested packages such as interplm.train.
+    # Keep the pinned full source tree importable without altering PATH.
+    printf 'import sys; sys.path.insert(0, "/opt/InterPLM")\n' \
+        >/opt/envs/interplm/lib/python3.12/site-packages/interplm-source.pth
+
+    chmod -R a+rX /opt/InterPLM /opt/interplm /opt/envs/interplm
+    chmod -R a+rwx /work
+    rm -rf /root/.cache/pip
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export PYTHONDONTWRITEBYTECODE=1
+    export PYTHONNOUSERSITE=1
+    export HF_HUB_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
+    export HF_HOME=/work/cache/huggingface
+    export XDG_CACHE_HOME=/work/cache
+    export TORCH_HOME=/work/cache/torch
+    export TMPDIR=/tmp
+
+%runscript
+    exec /opt/envs/saprothub/bin/python /opt/saprothub/saprothub_forward.py "$@"
+
+%test
+    /opt/envs/saprothub/bin/python -c 'import torch, transformers; assert torch.version.cuda; print("saprothub", torch.__version__, transformers.__version__)'
+    /opt/envs/interplm/bin/python -c 'import platform, torch, transformers, interplm; assert platform.machine()=="aarch64"; assert torch.version.cuda; print("interplm", torch.__version__, transformers.__version__)'
+    /opt/envs/interplm/bin/python /opt/interplm/interplm_run.py --help >/dev/null

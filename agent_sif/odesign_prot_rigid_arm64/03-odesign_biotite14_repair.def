@@ -1,0 +1,17 @@
+Bootstrap: localimage
+From: build-context/parent.sif
+
+%labels
+    org.opencontainers.image.variant odesign-prot-rigid-arm64-biotite14
+
+%post
+    set -eux
+    export PIP_CONFIG_FILE=/dev/null
+    export PIP_INDEX_URL=https://pypi.org/simple
+    unset PIP_EXTRA_INDEX_URL
+    /opt/envs/odesign/bin/pip install --no-cache-dir --upgrade biotite==1.4.0
+    /opt/envs/odesign/bin/python -c 'from biotite.interface.rdkit import from_mol; print(from_mol)'
+    rm -rf /root/.cache/pip
+
+%test
+    /opt/envs/odesign/bin/python -c 'import biotite; from biotite.interface.rdkit import from_mol; print(biotite.__version__)'
